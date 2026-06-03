@@ -976,6 +976,40 @@ class TestSendTelegramThreadIdMapping:
         kwargs = bot.send_message.await_args.kwargs
         assert kwargs["message_thread_id"] == 17585
 
+    def test_configured_private_dm_topic_uses_direct_messages_topic_id(self, monkeypatch):
+        """Configured Telegram DM topics must use direct_messages_topic_id, not forum thread routing."""
+        from types import SimpleNamespace
+        from gateway.config import Platform
+        from tools.send_message_tool import _send_to_platform
+
+        bot = self._make_bot()
+        _install_telegram_mock(monkeypatch, bot)
+        pconfig = SimpleNamespace(
+            token="tok",
+            extra={
+                "dm_topics": [
+                    {
+                        "chat_id": 7263708954,
+                        "topics": [{"name": "Morning Briefing", "thread_id": 2789}],
+                    }
+                ]
+            },
+        )
+
+        asyncio.run(
+            _send_to_platform(
+                Platform.TELEGRAM,
+                pconfig,
+                "7263708954",
+                "hello",
+                thread_id="2789",
+            )
+        )
+
+        kwargs = bot.send_message.await_args.kwargs
+        assert kwargs["direct_messages_topic_id"] == 2789
+        assert "message_thread_id" not in kwargs
+
     def test_no_thread_id_no_kwarg(self, monkeypatch):
         """With no thread_id, message_thread_id must not appear in kwargs."""
         bot = self._make_bot()

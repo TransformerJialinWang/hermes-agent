@@ -351,6 +351,34 @@ def _handle_send(args):
         return json.dumps(_error(f"Send failed: {e}"))
 
 
+def _telegram_direct_messages_topic_id_for_target(pconfig, chat_id, thread_id):
+    """Return direct_messages_topic_id for configured Telegram DM topic targets.
+
+    Telegram private-chat topics are not forum topics. Scheduled/standalone sends
+    have no reply anchor, so routing them with ``message_thread_id`` can fail or
+    land outside the intended lane. When the target matches a configured
+    ``platforms.telegram.extra.dm_topics`` entry, use Bot API
+    ``direct_messages_topic_id`` instead.
+    """
+    if not chat_id or thread_id is None:
+        return None
+    try:
+        if int(str(chat_id)) <= 0:
+            return None
+    except (TypeError, ValueError):
+        return None
+
+    extra = getattr(pconfig, "extra", None) or {}
+    for chat_cfg in extra.get("dm_topics", []) or []:
+        if str(chat_cfg.get("chat_id")) != str(chat_id):
+            continue
+        for topic in chat_cfg.get("topics", []) or []:
+            configured_thread = topic.get("thread_id")
+            if configured_thread is not None and str(configured_thread) == str(thread_id):
+                return str(topic.get("direct_messages_topic_id") or configured_thread)
+    return None
+
+
 def _parse_target_ref(platform_name: str, target_ref: str):
     """Parse a tool target into chat_id/thread_id and whether it is explicit."""
     if platform_name == "telegram":
@@ -645,6 +673,9 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
                 chunk,
                 media_files=media_files if is_last else [],
                 thread_id=thread_id,
+                direct_messages_topic_id=_telegram_direct_messages_topic_id_for_target(
+                    pconfig, chat_id, thread_id
+                ),
                 disable_link_previews=disable_link_previews,
                 force_document=force_document,
             )
@@ -825,7 +856,7 @@ def _is_telegram_thread_not_found(error: Exception) -> bool:
     return "thread not found" in str(error).lower()
 
 
-async def _send_telegram(token, chat_id, message, media_files=None, thread_id=None, disable_link_previews=False, force_document=False):
+async def _send_telegram(token, chat_id, message, media_files=None, thread_id=None, direct_messages_topic_id=None, disable_link_previews=False, force_document=False):
     """Send via Telegram Bot API (one-shot, no polling needed).
 
     Applies markdown→MarkdownV2 formatting (same as the gateway adapter)
@@ -882,7 +913,9 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
         int_chat_id = int(chat_id)
         media_files = media_files or []
         thread_kwargs = {}
-        if thread_id is not None:
+        if direct_messages_topic_id is not None:
+            thread_kwargs["direct_messages_topic_id"] = int(direct_messages_topic_id)
+        elif thread_id is not None:
             # Reuse the gateway adapter's General-topic mapping: in Telegram
             # forum supergroups, the General topic is addressed as
             # message_thread_id="1" on incoming updates, but Bot API
