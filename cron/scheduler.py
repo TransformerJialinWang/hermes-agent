@@ -634,7 +634,10 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
             return msg
         return None  # local-only jobs don't deliver — not a failure
 
-    from tools.send_message_tool import _send_to_platform
+    from tools.send_message_tool import (
+        _send_to_platform,
+        _telegram_direct_messages_topic_id_for_target,
+    )
     from gateway.config import load_gateway_config, Platform
 
     # Optionally wrap the content with a header/footer so the user knows this
@@ -717,6 +720,16 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
         delivered = False
         if runtime_adapter is not None and loop is not None and getattr(loop, "is_running", lambda: False)():
             send_metadata = {"thread_id": thread_id} if thread_id else None
+            if platform == Platform.TELEGRAM and thread_id:
+                direct_topic_id = _telegram_direct_messages_topic_id_for_target(
+                    pconfig, chat_id, thread_id
+                )
+                if direct_topic_id is not None:
+                    send_metadata = {
+                        "thread_id": str(thread_id),
+                        "telegram_dm_topic_reply_fallback": True,
+                        "direct_messages_topic_id": direct_topic_id,
+                    }
             try:
                 # Send cleaned text (MEDIA tags stripped) — not the raw content
                 text_to_send = cleaned_delivery_content.strip()

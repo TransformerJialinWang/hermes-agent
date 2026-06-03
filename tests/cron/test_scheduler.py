@@ -836,6 +836,59 @@ class TestDeliverResultWrapping:
         send_mock.assert_called_once()
         assert send_mock.call_args.kwargs["thread_id"] == "17585"
 
+    def test_live_adapter_telegram_dm_topic_uses_direct_messages_topic_id(self):
+        """Cron delivery to configured Telegram DM topics must not require a reply anchor."""
+        from concurrent.futures import Future
+        from gateway.config import Platform
+        from gateway.platforms.base import SendResult
+
+        adapter = MagicMock()
+        adapter.send = AsyncMock(return_value=SendResult(success=True, message_id="42"))
+
+        pconfig = MagicMock()
+        pconfig.enabled = True
+        pconfig.extra = {
+            "dm_topics": [
+                {
+                    "chat_id": 7263708954,
+                    "topics": [{"name": "Morning Briefing", "thread_id": 2789}],
+                }
+            ]
+        }
+        mock_cfg = MagicMock()
+        mock_cfg.platforms = {Platform.TELEGRAM: pconfig}
+
+        loop = MagicMock()
+        loop.is_running.return_value = True
+
+        completed_future = Future()
+        completed_future.set_result(SendResult(success=True, message_id="42"))
+
+        def fake_schedule(coro, _loop):
+            coro.close()
+            return completed_future
+
+        job = {
+            "id": "dm-topic-job",
+            "deliver": "telegram:7263708954:2789",
+        }
+
+        with patch("gateway.config.load_gateway_config", return_value=mock_cfg), \
+             patch("cron.scheduler.load_config", return_value={"cron": {"wrap_response": False}}), \
+             patch("agent.async_utils.safe_schedule_threadsafe", side_effect=fake_schedule):
+            result = _deliver_result(job, "Morning report", adapters={Platform.TELEGRAM: adapter}, loop=loop)
+
+        assert result is None
+        adapter.send.assert_called_once_with(
+            "7263708954",
+            "Morning report",
+            metadata={
+                "thread_id": "2789",
+                "telegram_dm_topic_reply_fallback": True,
+                "direct_messages_topic_id": "2789",
+            },
+        )
+
 
 class TestDeliverResultErrorReturns:
     """Verify _deliver_result returns error strings on failure, None on success."""
